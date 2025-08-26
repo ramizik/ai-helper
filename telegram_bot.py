@@ -17,12 +17,6 @@ import os
 from dotenv import load_dotenv
 from telegram import ForceReply, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-import os
-from dotenv import load_dotenv
-
-# Access the environment variables
-load_dotenv()
-bot_token = os.getenv("BOT_TOKEN")
 
 # Enable logging
 logging.basicConfig(
