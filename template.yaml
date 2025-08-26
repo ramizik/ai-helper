@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AI Assistant - Telegram Bot with Scheduled Reminders
+
+# Global configuration for all functions
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: python3.11
+    Environment:
+      Variables:
+        POWERTOOLS_SERVICE_NAME: aihelper
+        LOG_LEVEL: INFO
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  BotToken:
+    Type: String
+    NoEcho: true
+    Description: Telegram Bot Token (passed as environment variable)
+
+Resources:
+  # DynamoDB table for user data
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'aihelper-users-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: N
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+
+  # API Gateway for webhook
+  TelegramWebhookApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Environment
+      Cors:
+        AllowMethods: "'POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+
+  # Lambda function for handling bot messages
+  TelegramBotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'aihelper-bot-${Environment}'
+      CodeUri: .
+      Handler: lambda_bot.lambda_handler
+      Description: Handles incoming Telegram messages via webhook
+      Environment:
+        Variables:
+          USERS_TABLE_NAME: !Ref UsersTable
+          BOT_TOKEN: !Ref BotToken
+      Events:
+        WebhookApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TelegramWebhookApi
+            Path: /webhook
+            Method: post
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+
+  # CloudWatch Log Groups with retention
+  BotLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/aihelper-bot-${Environment}'
+      RetentionInDays: 14
+
+Outputs:
+  WebhookUrl:
+    Description: Webhook URL for Telegram Bot
+    Value: !Sub 'https://${TelegramWebhookApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/webhook'
+    Export:
+      Name: !Sub '${AWS::StackName}-webhook-url'
+
+  UsersTableName:
+    Description: DynamoDB table name for users
+    Value: !Ref UsersTable
+    Export:
+      Name: !Sub '${AWS::StackName}-users-table'
+
+  BotFunctionArn:
+    Description: Bot Lambda function ARN
+    Value: !GetAtt TelegramBotFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-bot-function-arn'
