@@ -1,0 +1,310 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AI Assistant - Personal AI Buddy with Google Calendar Integration
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: python3.13
+    Environment:
+      Variables:
+        USER_ID: 1681943565  # Your Telegram user ID
+        CALENDAR_EVENTS_TABLE: !Ref CalendarEventsTable
+        AI_MEMORY_TABLE: !Ref AIMemoryTable
+        NOTIFICATIONS_TABLE: !Ref NotificationsTable
+        USERS_TABLE: !Ref UsersTable
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Environment name
+  
+  BotToken:
+    Type: String
+    NoEcho: true
+    Description: Telegram Bot Token (will be stored in Secrets Manager)
+
+Resources:
+  # DynamoDB Tables
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "aihelper-users-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: N
+        - AttributeName: sort_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+        - AttributeName: sort_key
+          KeyType: RANGE
+
+  CalendarEventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "aihelper-calendar-events-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: N
+        - AttributeName: sort_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+        - AttributeName: sort_key
+          KeyType: RANGE
+
+  AIMemoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "aihelper-ai-memory-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: N
+        - AttributeName: sort_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+        - AttributeName: sort_key
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  NotificationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "aihelper-notifications-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: N
+        - AttributeName: sort_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+        - AttributeName: sort_key
+          KeyType: RANGE
+
+  # Secrets Manager
+  GoogleCalendarCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "google-calendar-credentials-${Environment}"
+      Description: Google Calendar API credentials
+      SecretString: !Sub |
+        {
+          "client_id": "YOUR_GOOGLE_CLIENT_ID",
+          "client_secret": "YOUR_GOOGLE_CLIENT_SECRET",
+          "refresh_token": "YOUR_REFRESH_TOKEN",
+          "token_uri": "https://oauth2.googleapis.com/token"
+        }
+
+  OpenAIAPISecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "openai-api-key-${Environment}"
+      Description: OpenAI API key
+      SecretString: !Sub |
+        {
+          "api_key": "YOUR_OPENAI_API_KEY"
+        }
+
+  TelegramBotTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "telegram-bot-token-${Environment}"
+      Description: Telegram Bot Token
+      SecretString: !Sub |
+        {
+          "bot_token": "${BotToken}"
+        }
+
+  # Lambda Functions
+  TelegramBotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../lambdas/telegram_bot/
+      Handler: handler.lambda_handler
+      FunctionName: !Sub "aihelper-telegram-bot-${Environment}"
+      Environment:
+        Variables:
+          BOT_TOKEN_SECRET: !Ref TelegramBotTokenSecret
+      Events:
+        WebhookEvent:
+          Type: Api
+          Properties:
+            Path: /webhook
+            Method: post
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SecretsManagerReadWrite:
+            SecretArn: !Ref TelegramBotTokenSecret
+
+  CalendarFetcherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../lambdas/calendar_fetcher/
+      Handler: handler.lambda_handler
+      FunctionName: !Sub "aihelper-calendar-fetcher-${Environment}"
+      Environment:
+        Variables:
+          GOOGLE_CREDENTIALS_SECRET: !Ref GoogleCalendarCredentialsSecret
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CalendarEventsTable
+        - SecretsManagerReadWrite:
+            SecretArn: !Ref GoogleCalendarCredentialsSecret
+
+  AIProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../lambdas/ai_processor/
+      Handler: handler.lambda_handler
+      FunctionName: !Sub "aihelper-ai-processor-${Environment}"
+      Environment:
+        Variables:
+          OPENAI_API_KEY_SECRET: !Ref OpenAIAPISecret
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AIMemoryTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref CalendarEventsTable
+        - SecretsManagerReadWrite:
+            SecretArn: !Ref OpenAIAPISecret
+
+  SchedulerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../lambdas/scheduler/
+      Handler: handler.lambda_handler
+      FunctionName: !Sub "aihelper-scheduler-${Environment}"
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref CalendarEventsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref AIMemoryTable
+
+  NotifierFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../lambdas/notifier/
+      Handler: handler.lambda_handler
+      FunctionName: !Sub "aihelper-notifier-${Environment}"
+      Environment:
+        Variables:
+          BOT_TOKEN_SECRET: !Ref TelegramBotTokenSecret
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref NotificationsTable
+        - SecretsManagerReadWrite:
+            SecretArn: !Ref TelegramBotTokenSecret
+
+  # EventBridge Rules
+  MorningSummaryRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "aihelper-morning-summary-${Environment}"
+      Description: Trigger AI processor for morning summary at 8 AM
+      ScheduleExpression: "cron(0 8 * * ? *)"  # 8 AM daily
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt AIProcessorFunction.Arn
+          Id: MorningSummaryTarget
+
+  RegularCheckRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "aihelper-regular-check-${Environment}"
+      Description: Check calendar every 30 minutes
+      ScheduleExpression: "cron(*/30 * * * ? *)"  # Every 30 minutes
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SchedulerFunction.Arn
+          Id: RegularCheckTarget
+
+  CalendarSyncRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "aihelper-calendar-sync-${Environment}"
+      Description: Sync calendar events every hour
+      ScheduleExpression: "cron(0 */1 * * ? *)"  # Every hour
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt CalendarFetcherFunction.Arn
+          Id: CalendarSyncTarget
+
+  # EventBridge Permissions
+  AIProcessorEventBridgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AIProcessorFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MorningSummaryRule.Arn
+
+  SchedulerEventBridgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SchedulerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RegularCheckRule.Arn
+
+  CalendarFetcherEventBridgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CalendarFetcherFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CalendarSyncRule.Arn
+
+  # API Gateway
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Environment
+      Cors:
+        AllowMethods: "'POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+
+Outputs:
+  TelegramBotApiUrl:
+    Description: "API Gateway endpoint URL for Telegram Bot"
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/webhook"
+    Export:
+      Name: !Sub "${AWS::StackName}-TelegramBotApiUrl"
+
+  CalendarFetcherFunctionArn:
+    Description: "Calendar Fetcher Lambda Function ARN"
+    Value: !GetAtt CalendarFetcherFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-CalendarFetcherFunctionArn"
+
+  AIProcessorFunctionArn:
+    Description: "AI Processor Lambda Function ARN"
+    Value: !GetAtt AIProcessorFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-AIProcessorFunctionArn"
+
+  DynamoDBTables:
+    Description: "DynamoDB Table Names"
+    Value: !Sub |
+      Users: ${UsersTable}
+      Calendar Events: ${CalendarEventsTable}
+      AI Memory: ${AIMemoryTable}
+      Notifications: ${NotificationsTable}
+    Export:
+      Name: !Sub "${AWS::StackName}-DynamoDBTables"
