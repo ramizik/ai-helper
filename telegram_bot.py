@@ -13,6 +13,8 @@ bot.
 """
 
 import logging
+import os
+from dotenv import load_dotenv
 from telegram import ForceReply, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 import os
@@ -31,6 +33,10 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+# Access the environment variables
+load_dotenv()
+bot_token = os.getenv("BOT_TOKEN")
 
 # Define a few command handlers. These usually take the two arguments update and
 # context.
