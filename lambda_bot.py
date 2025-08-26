@@ -9,10 +9,11 @@ and can be extended with AI capabilities and scheduled reminders.
 import json
 import logging
 import os
+import asyncio
 import boto3
 from typing import Dict, Any
 from telegram import Bot, Update, ForceReply
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ContextTypes
 
 # Configure logging for CloudWatch
 logger = logging.getLogger()
@@ -24,9 +25,6 @@ try:
 except Exception:
     dynamodb = None  # DynamoDB optional for basic bot functionality
 
-# Global bot instance (cached between Lambda invocations)
-bot_instance = None
-
 def get_bot_token() -> str:
     """Retrieve bot token from environment variable"""
     token = os.getenv('BOT_TOKEN', '')
@@ -35,14 +33,24 @@ def get_bot_token() -> str:
     return token
 
 def get_bot() -> Bot:
-    """Get or create cached bot instance"""
-    global bot_instance
-    if bot_instance is None:
-        token = get_bot_token()
-        if not token:
-            raise ValueError("Bot token not found in Parameter Store or environment")
-        bot_instance = Bot(token=token)
-    return bot_instance
+    """Create a fresh bot instance for each Lambda invocation"""
+    token = get_bot_token()
+    if not token:
+        raise ValueError("Bot token not found in environment")
+    
+    # Create fresh Bot instance with Lambda-optimized settings
+    from telegram.request import HTTPXRequest
+    
+    # Configure connection pool for Lambda (smaller pool, shorter timeout)
+    request = HTTPXRequest(
+        pool_timeout=5.0,    # Shorter timeout for Lambda
+        connection_pool_size=1,  # Minimal pool size
+        read_timeout=10.0,
+        write_timeout=10.0,
+        connect_timeout=5.0
+    )
+    
+    return Bot(token=token, request=request)
 
 # Command handlers - matching current telegram_bot.py functionality
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -79,7 +87,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Echo the user message."""
     await update.message.reply_text(update.message.text)
 
-def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+async def lambda_handler_async(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     AWS Lambda handler for Telegram webhook
     
@@ -107,17 +115,29 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             logger.error("Could not parse update from webhook")
             return {'statusCode': 400, 'body': 'Invalid update'}
         
-        # Create application instance for handling the update
-        application = Application.builder().token(get_bot_token()).build()
+        # Process update directly without Application (webhook mode)
+        # Create a simple context for handlers
+        class SimpleContext:
+            def __init__(self):
+                pass
         
-        # Register handlers - matching current telegram_bot.py
-        application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+        context = SimpleContext()
         
-        # Process the update
-        import asyncio
-        asyncio.run(application.process_update(update))
+        # Route the update to appropriate handler
+        if update.message:
+            if update.message.text:
+                if update.message.text.startswith('/start'):
+                    await start_command(update, context)
+                elif update.message.text.startswith('/help'):
+                    await help_command(update, context)
+                else:
+                    # Echo for non-command messages
+                    await echo(update, context)
+            else:
+                # Handle non-text messages (ignore for now)
+                logger.info("Received non-text message, ignoring")
+        else:
+            logger.info("Received update without message, ignoring")
         
         logger.info("Update processed successfully")
         return {
@@ -127,6 +147,24 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         
     except Exception as e:
         logger.error(f"Error processing update: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': str(e)})
+        }
+
+def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """
+    AWS Lambda entry point - synchronous wrapper for async handler
+    """
+    try:
+        # Run the async handler
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(lambda_handler_async(event, context))
+        loop.close()
+        return result
+    except Exception as e:
+        logger.error(f"Error in lambda_handler wrapper: {str(e)}")
         return {
             'statusCode': 500,
             'body': json.dumps({'error': str(e)})
