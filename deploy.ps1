@@ -1,11 +1,5 @@
 #!/usr/bin/env pwsh
 
-param(
-    [Parameter(Mandatory = $false)]
-    [ValidateSet("dev", "prod")]
-    [string]$Environment = "dev"
-)
-
 $ErrorActionPreference = "Stop"
 
 function Write-ColorOutput {
@@ -46,16 +40,19 @@ function Test-Prerequisites {
         exit 1
     }
     
+    # Docker is optional - we'll use local builds if not available
     try {
         $dockerVersion = docker --version 2>$null
         if ($LASTEXITCODE -eq 0) {
-            Write-ColorOutput "OK Docker: $dockerVersion" "Success"
+            Write-ColorOutput "OK Docker: $dockerVersion (Container builds enabled)" "Success"
+            $script:DockerAvailable = $true
         } else {
             throw "Docker not found"
         }
     } catch {
-        Write-ColorOutput "ERROR Docker not found" "Error"
-        exit 1
+        Write-ColorOutput "WARNING Docker not found - will use local builds" "Warning"
+        Write-ColorOutput "  Note: Local builds may cause deployment issues" "Warning"
+        $script:DockerAvailable = $false
     }
 }
 
@@ -87,7 +84,15 @@ function Build-Project {
     Write-ColorOutput "Building SAM project..." "Info"
     
     try {
-        sam build --use-container
+        if ($script:DockerAvailable) {
+            Write-ColorOutput "  Using Docker container build (recommended)" "Info"
+            sam build --use-container
+        } else {
+            Write-ColorOutput "  Using local build (Docker not available)" "Warning"
+            Write-ColorOutput "  This may cause deployment issues" "Warning"
+            sam build
+        }
+        
         if ($LASTEXITCODE -ne 0) {
             throw "SAM build failed"
         }
@@ -102,7 +107,7 @@ function Deploy-Stack {
     Write-ColorOutput "Deploying to AWS..." "Info"
     
     try {
-        $deployArgs = @("deploy", "--guided", "--parameter-overrides", "Environment=$Environment")
+        $deployArgs = @("deploy", "--guided")
         sam @deployArgs
         
         if ($LASTEXITCODE -ne 0) {
@@ -119,7 +124,7 @@ function Test-Deployment {
     Write-ColorOutput "Verifying deployment..." "Info"
     
     try {
-        $stackName = "aihelper-$Environment"
+        $stackName = "aihelper"
         $stackStatus = aws cloudformation describe-stacks --stack-name $stackName --query "Stacks[0].StackStatus" --output text 2>$null
         
         if ($stackStatus -eq "CREATE_COMPLETE" -or $stackStatus -eq "UPDATE_COMPLETE") {
@@ -136,7 +141,7 @@ function Set-Webhook {
     Write-ColorOutput "Setting Telegram webhook..." "Info"
     
     try {
-        $stackName = "aihelper-$Environment"
+        $stackName = "aihelper"
         $apiUrl = aws cloudformation describe-stacks --stack-name $stackName --query "Stacks[0].Outputs[?OutputKey=='TelegramBotApiUrl'].OutputValue" --output text 2>$null
         
         if (-not $apiUrl) {
@@ -175,11 +180,19 @@ function Show-NextSteps {
     Write-ColorOutput "2. Check CloudWatch logs" "Info"
     Write-ColorOutput "3. Monitor calendar sync" "Info"
     Write-ColorOutput "4. Verify DynamoDB tables" "Info"
+    
+    if (-not $script:DockerAvailable) {
+        Write-ColorOutput "" "Warning"
+        Write-ColorOutput "IMPORTANT: Docker was not available during build" "Warning"
+        Write-ColorOutput "If you encounter Lambda runtime errors:" "Warning"
+        Write-ColorOutput "1. Install Docker Desktop" "Warning"
+        Write-ColorOutput "2. Rebuild with: sam build --use-container" "Warning"
+        Write-ColorOutput "3. Redeploy with: sam deploy" "Warning"
+    }
 }
 
 try {
     Write-ColorOutput "AWS AI Assistant Deployment" "Success"
-    Write-ColorOutput "Environment: $Environment" "Info"
     Write-ColorOutput "================================" "Info"
     
     Test-Prerequisites
