@@ -5,30 +5,25 @@
 
 .DESCRIPTION
     This script deploys the AI Assistant stack to AWS including:
-    - Multi-Lambda architecture (Telegram Bot, Calendar Fetcher, AI Processor, etc.)
-    - DynamoDB tables for users, calendar events, AI memory, and notifications
-    - EventBridge rules for scheduling
-    - Secrets Manager for API keys
+    - Working Telegram Bot with webhook handling
+    - Working Calendar Fetcher with Google Calendar integration
+    - DynamoDB tables for users and calendar events
+    - EventBridge rule for hourly calendar sync
+    - Uses existing AWS Secrets Manager secrets
     - API Gateway for webhook
 
 .PARAMETER Environment
     Deployment environment (dev/prod). Defaults to 'dev'
 
-.PARAMETER BotToken
-    Telegram Bot Token (optional - can be set in .env file)
-
 .EXAMPLE
-    .\deploy-enhanced.ps1 -Environment dev
-    .\deploy-enhanced.ps1 -Environment prod -BotToken "YOUR_BOT_TOKEN"
+    .\deploy.ps1 -Environment dev
+    .\deploy.ps1 -Environment prod
 #>
 
 param(
     [Parameter(Mandatory = $false)]
     [ValidateSet("dev", "prod")]
-    [string]$Environment = "dev",
-    
-    [Parameter(Mandatory = $false)]
-    [string]$BotToken
+    [string]$Environment = "dev"
 )
 
 # Set error action preference
@@ -95,38 +90,39 @@ function Test-Prerequisites {
     }
 }
 
-function Read-EnvironmentFile {
-    Write-ColorOutput "Reading environment configuration..." "Info"
+function Test-ExistingSecrets {
+    Write-ColorOutput "Checking existing AWS Secrets Manager secrets..." "Info"
     
-    $envFile = ".env"
-    if (Test-Path $envFile) {
-        Get-Content $envFile | ForEach-Object {
-            if ($_ -match "^([^#][^=]+)=(.*)$") {
-                $name = $matches[1].Trim()
-                $value = $matches[2].Trim()
-                Set-Item -Path "env:$name" -Value $value
-                Write-ColorOutput "  Loaded: $name" "Info"
+    try {
+        # Check if required secrets exist
+        $requiredSecrets = @(
+            "telegram-bot-token-dev",
+            "google-calendar-credentials-dev"
+        )
+        
+        foreach ($secretName in $requiredSecrets) {
+            try {
+                $secret = aws secretsmanager describe-secret --secret-id $secretName 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    Write-ColorOutput "  ✓ Secret found: $secretName" "Success"
+                } else {
+                    Write-ColorOutput "  ❌ Secret missing: $secretName" "Error"
+                    Write-ColorOutput "    → Create it manually: aws secretsmanager create-secret --name '$secretName' --secret-string '{\"key\":\"value\"}'" "Warning"
+                    return $false
+                }
+            } catch {
+                Write-ColorOutput "  ❌ Secret missing: $secretName" "Error"
+                return $false
             }
         }
-        Write-ColorOutput "✓ Environment file loaded successfully" "Success"
-    } else {
-        Write-ColorOutput "  No .env file found, using command line parameters" "Warning"
+        
+        Write-ColorOutput "✓ All required secrets are available" "Success"
+        return $true
+        
+    } catch {
+        Write-ColorOutput "✗ Failed to check secrets: $_" "Error"
+        return $false
     }
-}
-
-function Get-BotToken {
-    # Priority: Command line parameter > Environment variable > .env file
-    if ($BotToken) {
-        return $BotToken
-    }
-    
-    if ($env:BOT_TOKEN) {
-        return $env:BOT_TOKEN
-    }
-    
-    Write-ColorOutput "✗ Bot Token not found. Please provide it via -BotToken parameter or set BOT_TOKEN in .env file" "Error"
-    Write-ColorOutput "  You can also check env.template for the required format" "Info"
-    exit 1
 }
 
 function Build-Project {
@@ -149,10 +145,6 @@ function Build-Project {
 }
 
 function Deploy-Stack {
-    param(
-        [string]$BotToken
-    )
-    
     Write-ColorOutput "Deploying AI Assistant stack to AWS..." "Info"
     
     try {
@@ -161,8 +153,7 @@ function Deploy-Stack {
             "deploy",
             "--guided",
             "--parameter-overrides",
-            "Environment=$Environment",
-            "BotToken=$BotToken"
+            "Environment=$Environment"
         )
         
         Write-ColorOutput "Running: sam $($deployArgs -join ' ')" "Info"
@@ -228,7 +219,16 @@ function Set-Webhook {
             return
         }
         
-        $botToken = Get-BotToken
+        # Get bot token from existing secret
+        $botTokenSecret = aws secretsmanager get-secret-value --secret-id "telegram-bot-token-dev" --query 'SecretString' --output text 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-ColorOutput "  ❌ Could not retrieve bot token from secret" "Error"
+            return
+        }
+        
+        $botTokenData = $botTokenSecret | ConvertFrom-Json
+        $botToken = $botTokenData.bot_token
+        
         $webhookUrl = "$apiUrl"
         
         Write-ColorOutput "  Setting webhook to AWS API Gateway: $webhookUrl" "Info"
@@ -250,30 +250,23 @@ function Set-Webhook {
 function Show-NextSteps {
     Write-ColorOutput "`n🎉 AWS Deployment Complete! Next Steps:" "Success"
     
-    Write-ColorOutput "`n1. Set up Google Calendar API credentials in AWS Secrets Manager:" "Info"
-    Write-ColorOutput "   - Go to Google Cloud Console" "Info"
-    Write-ColorOutput "   - Enable Calendar API" "Info"
-    Write-ColorOutput "   - Create OAuth 2.0 credentials" "Info"
-    Write-ColorOutput "   - Update the secret in AWS Secrets Manager" "Info"
+    Write-ColorOutput "`n1. Verify your existing AWS Secrets Manager secrets:" "Info"
+    Write-ColorOutput "   - telegram-bot-token-dev (should contain your bot token)" "Info"
+    Write-ColorOutput "   - google-calendar-credentials-dev (should contain Google OAuth credentials)" "Info"
     
-    Write-ColorOutput "`n2. Set up OpenAI API key in AWS Secrets Manager:" "Info"
-    Write-ColorOutput "   - Get API key from OpenAI" "Info"
-    Write-ColorOutput "   - Update the secret in AWS Secrets Manager" "Info"
-    
-    Write-ColorOutput "`n3. Test the system:" "Info"
+    Write-ColorOutput "`n2. Test the system:" "Info"
     Write-ColorOutput "   - Send a message to your Telegram bot" "Info"
     Write-ColorOutput "   - Check CloudWatch logs for any errors" "Info"
     
-    Write-ColorOutput "`n4. Monitor scheduled functions in AWS:" "Info"
+    Write-ColorOutput "`n3. Monitor calendar integration:" "Info"
     Write-ColorOutput "   - Calendar sync runs every hour via EventBridge" "Info"
-    Write-ColorOutput "   - AI processing runs at 8 AM daily via EventBridge" "Info"
-    Write-ColorOutput "   - Regular checks run every 30 minutes via EventBridge" "Info"
+    Write-ColorOutput "   - Check CloudWatch logs for calendar fetcher function" "Info"
+    Write-ColorOutput "   - Verify events are stored in DynamoDB" "Info"
     
-    Write-ColorOutput "`n5. AWS Resources created:" "Info"
-    Write-ColorOutput "   - Lambda Functions: 5 functions for different purposes" "Info"
-    Write-ColorOutput "   - DynamoDB Tables: 4 tables for data storage" "Info"
-    Write-ColorOutput "   - EventBridge Rules: 3 rules for scheduling" "Info"
-    Write-ColorOutput "   - Secrets Manager: 3 secrets for API keys" "Info"
+    Write-ColorOutput "`n4. AWS Resources created:" "Info"
+    Write-ColorOutput "   - Lambda Functions: 2 functions (Telegram Bot + Calendar Fetcher)" "Info"
+    Write-ColorOutput "   - DynamoDB Tables: 2 tables (Users + Calendar Events)" "Info"
+    Write-ColorOutput "   - EventBridge Rule: 1 rule for hourly calendar sync" "Info"
     Write-ColorOutput "   - API Gateway: Webhook endpoint for Telegram" "Info"
     
     Write-ColorOutput "`n📚 Documentation: Check the PROJECT_STRUCTURE.md file for detailed information" "Info"
@@ -285,22 +278,24 @@ try {
     Write-ColorOutput "Environment: $Environment" "Info"
     Write-ColorOutput "Mode: AWS Cloud Deployment Only" "Info"
     Write-ColorOutput "Dependencies: Automatic via SAM Container Build" "Info"
+    Write-ColorOutput "Functions: Telegram Bot + Calendar Fetcher (Working Only)" "Info"
+    Write-ColorOutput "Secrets: Using existing AWS Secrets Manager secrets" "Info"
     Write-ColorOutput "===============================================" "Info"
     
     # Check prerequisites
     Test-Prerequisites
     
-    # Read environment configuration
-    Read-EnvironmentFile
-    
-    # Get bot token
-    $botToken = Get-BotToken
+    # Check existing secrets
+    if (-not (Test-ExistingSecrets)) {
+        Write-ColorOutput "❌ Required secrets are missing. Please create them first." "Error"
+        exit 1
+    }
     
     # Build project
     Build-Project
     
     # Deploy stack
-    Deploy-Stack -BotToken $botToken
+    Deploy-Stack
     
     # Test deployment
     Test-Deployment
