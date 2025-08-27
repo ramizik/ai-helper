@@ -19,7 +19,12 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # AWS services
-dynamodb = None  # DynamoDB optional for basic bot functionality
+try:
+    dynamodb = boto3.resource('dynamodb')
+    logger.info("DynamoDB initialized successfully")
+except Exception as e:
+    logger.warning(f"Failed to initialize DynamoDB: {e}")
+    dynamodb = None  # DynamoDB optional for basic bot functionality
 
 def get_bot_token() -> str:
     """Retrieve bot token from AWS Secrets Manager or fallback to environment"""
@@ -31,8 +36,8 @@ def get_bot_token() -> str:
             
             try:
                 response = secrets_client.get_secret_value(SecretId=secret_name)
-                secret_data = json.loads(response['SecretString'])
-                token = secret_data.get('bot_token') or secret_data.get('BOT_TOKEN')
+                # Secret is stored as plain string, not JSON
+                token = response['SecretString']
                 
                 if token:
                     logger.info("Retrieved bot token from AWS Secrets Manager")
@@ -183,10 +188,13 @@ async def lambda_handler_async(event: Dict[str, Any], context: Any) -> Dict[str,
         if 'body' not in event:
             return {'statusCode': 400, 'body': 'No body in event'}
         
-        # Parse the Telegram update
+        # Get bot instance first
+        bot = get_bot()
+        
+        # Parse the Telegram update with bot instance
         try:
             update_data = json.loads(event['body'])
-            update = Update.de_json(update_data, None)
+            update = Update.de_json(update_data, bot)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON: {e}")
             return {'statusCode': 400, 'body': 'Invalid JSON'}
@@ -200,15 +208,26 @@ async def lambda_handler_async(event: Dict[str, Any], context: Any) -> Dict[str,
             # Log user message
             await log_message_to_db(user.id, message_text, "user", update.message.date)
             
-            # Route to appropriate handler
-            if update.message.text.startswith('/start'):
-                await start_command(update, context)
-            elif update.message.text.startswith('/help'):
-                await help_command(update, context)
-            else:
-                await echo(update, context)
-            
-            logger.info(f"Bot processed message for {user.id}")
+            try:
+                # Route to appropriate handler
+                if update.message.text.startswith('/start'):
+                    logger.info(f"Processing /start command for user {user.id}")
+                    await start_command(update, context)
+                elif update.message.text.startswith('/help'):
+                    logger.info(f"Processing /help command for user {user.id}")
+                    await help_command(update, context)
+                else:
+                    logger.info(f"Processing echo for user {user.id}")
+                    await echo(update, context)
+                
+                logger.info(f"Bot processed message for {user.id} successfully")
+            except Exception as e:
+                logger.error(f"Error processing command for user {user.id}: {e}")
+                # Try to send error message to user
+                try:
+                    await update.message.reply_text("Sorry, I encountered an error processing your request. Please try again.")
+                except Exception as reply_error:
+                    logger.error(f"Failed to send error reply: {reply_error}")
         
         return {'statusCode': 200, 'body': 'OK'}
         
@@ -220,11 +239,30 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """Synchronous wrapper for AWS Lambda compatibility"""
     import asyncio
     try:
+        # Create new event loop for this invocation
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        
+        # Run the async handler and get the result
         result = loop.run_until_complete(lambda_handler_async(event, context))
+        
+        # Clean up
         loop.close()
+        
+        # Ensure result is a dict, not a coroutine
+        if asyncio.iscoroutine(result):
+            logger.error("Handler returned coroutine instead of result")
+            return {'statusCode': 500, 'body': json.dumps({'error': 'Handler returned coroutine'})}
+        
         return result
+        
     except Exception as e:
         logger.error(f"Error in lambda_handler wrapper: {str(e)}")
         return {'statusCode': 500, 'body': json.dumps({'error': str(e)})}
+    finally:
+        # Ensure loop is always closed
+        try:
+            if 'loop' in locals() and not loop.is_closed():
+                loop.close()
+        except:
+            pass

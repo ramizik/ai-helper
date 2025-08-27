@@ -31,9 +31,13 @@ Resources:
       AttributeDefinitions:
         - AttributeName: user_id
           AttributeType: N
+        - AttributeName: sort_key
+          AttributeType: S
       KeySchema:
         - AttributeName: user_id
           KeyType: HASH
+        - AttributeName: sort_key
+          KeyType: RANGE
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       StreamSpecification:
@@ -84,11 +88,11 @@ Resources:
     Properties:
       FunctionName: !Sub 'aihelper-telegram-bot-${Environment}'
       CodeUri: lambdas/telegram_bot
-      Handler: handler.lambda_handler_async
+      Handler: handler.lambda_handler
       Description: Handles incoming Telegram messages via webhook
       Environment:
         Variables:
-          USERS_TABLE: !Ref UsersTable
+          USERS_TABLE: !Sub 'aihelper-users-${Environment}'
           BOT_TOKEN_SECRET: 'telegram-bot-token-dev'
           ENVIRONMENT: !Ref Environment
       Events:
@@ -117,7 +121,7 @@ Resources:
       Description: Fetches calendar events from Google Calendar
       Environment:
         Variables:
-          CALENDAR_EVENTS_TABLE: !Ref CalendarEventsTable
+          CALENDAR_EVENTS_TABLE: !Sub 'aihelper-calendar-events-${Environment}'
           GOOGLE_CREDENTIALS_SECRET: 'google-calendar-credentials-dev'
           ENVIRONMENT: !Ref Environment
       Policies:

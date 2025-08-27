@@ -149,14 +149,11 @@ function Set-Webhook {
             return
         }
         
-        $botTokenSecret = aws secretsmanager get-secret-value --secret-id "telegram-bot-token-dev" --query "SecretString" --output text 2>$null
+        $botToken = aws secretsmanager get-secret-value --secret-id "telegram-bot-token-dev" --query "SecretString" --output text 2>$null
         if ($LASTEXITCODE -ne 0) {
             Write-ColorOutput "ERROR Could not get bot token" "Error"
             return
         }
-        
-        $botTokenData = $botTokenSecret | ConvertFrom-Json
-        $botToken = $botTokenData.bot_token
         
         $webhookUrl = "$apiUrl"
         Write-ColorOutput "Setting webhook to: $webhookUrl" "Info"

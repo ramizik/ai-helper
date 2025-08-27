@@ -37,6 +37,7 @@ def get_google_calendar_credentials() -> Dict[str, str]:
         logger.info(f"Attempting to retrieve credentials from secret: {secret_name}")
         
         response = secrets_client.get_secret_value(SecretId=secret_name)
+        # Secret is stored as plain string, parse it as JSON
         secret_data = json.loads(response['SecretString'])
         
         logger.info("Successfully retrieved Google Calendar credentials from Secrets Manager")

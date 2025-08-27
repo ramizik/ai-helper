@@ -81,9 +81,11 @@ class AuthManager:
     def get_telegram_bot_token(self) -> str:
         """Get Telegram Bot token"""
         try:
-            secret_name = os.environ.get('TELEGRAM_BOT_TOKEN_SECRET', 'telegram-bot-token')
-            secret_data = self.get_secret(secret_name)
-            return secret_data.get('bot_token') or secret_data.get('BOT_TOKEN')
+            secret_name = os.environ.get('TELEGRAM_BOT_TOKEN_SECRET', 'telegram-bot-token-dev')
+            
+            # For bot token, get the plain string value directly
+            response = self.secrets_client.get_secret_value(SecretId=secret_name)
+            return response['SecretString']
             
         except Exception as e:
             logger.error(f"Failed to get Telegram Bot token: {e}")
