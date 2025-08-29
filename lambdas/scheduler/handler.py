@@ -64,6 +64,75 @@ def get_bot_token() -> str:
         logger.error(f"Failed to retrieve bot token: {e}")
         raise
 
+def get_tasks_table_name() -> str:
+    """Get the tasks table name from environment variables"""
+    return os.environ.get('TASKS_TABLE', 'aihelper-tasks-dev')
+
+def get_user_tasks(user_id: int) -> Dict[str, List[Dict[str, Any]]]:
+    """Get user's tasks: due today and incomplete"""
+    try:
+        logger.info(f"🆕 NEW DEPLOYMENT DETECTED! get_user_tasks called for user {user_id}")
+        
+        table_name = get_tasks_table_name()
+        logger.info(f"📋 Using tasks table: {table_name}")
+        table = dynamodb.Table(table_name)
+        
+        # Get all user's tasks
+        logger.info(f"🔍 Querying DynamoDB for user {user_id} tasks...")
+        response = table.query(
+            KeyConditionExpression=boto3.dynamodb.conditions.Key('user_id').eq(user_id) &
+                                  boto3.dynamodb.conditions.Key('sort_key').begins_with('task#')
+        )
+        
+        tasks = response.get('Items', [])
+        logger.info(f"📊 Raw tasks from DynamoDB: {len(tasks)} items")
+        
+        cleaned_tasks = []
+        
+        # Clean task data and filter by status
+        for task in tasks:
+            cleaned_task = clean_event_data(task)
+            if cleaned_task.get('status') != 'complete':
+                cleaned_tasks.append(cleaned_task)
+                logger.info(f"📋 Found incomplete task: {cleaned_task.get('name', 'Unnamed')} (status: {cleaned_task.get('status')})")
+        
+        logger.info(f"📝 Cleaned incomplete tasks: {len(cleaned_tasks)} items")
+        
+        # Separate tasks by due date
+        today_str = datetime.utcnow().strftime('%Y-%m-%d')
+        logger.info(f"📅 Today's date: {today_str}")
+        due_today = []
+        incomplete = []
+        
+        for task in cleaned_tasks:
+            task_due_date = task.get('due_date', '')
+            logger.info(f"📋 Task {task.get('name', 'Unnamed')} due date: '{task_due_date}' (comparing with '{today_str}')")
+            if task_due_date == today_str:
+                due_today.append(task)
+                logger.info(f"🚨 Task due today: {task.get('name', 'Unnamed')}")
+            incomplete.append(task)
+        
+        logger.info(f"🚨 Tasks due today: {len(due_today)}")
+        logger.info(f"📝 Total incomplete tasks: {len(incomplete)}")
+        
+        # Sort by priority (desc) then by due date
+        def sort_tasks(task_list):
+            return sorted(task_list, key=lambda t: (-(t.get('priority') or -1), t.get('due_date') or '9999-12-31'))
+        
+        result = {
+            'due_today': sort_tasks(due_today),
+            'incomplete': sort_tasks(incomplete)
+        }
+        
+        logger.info(f"📋 Returning tasks result: {result}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"🆕 NEW DEPLOYMENT DETECTED! Failed to get tasks for user {user_id}: {e}")
+        import traceback
+        logger.error(f"📋 Task fetching error traceback: {traceback.format_exc()}")
+        return {'due_today': [], 'incomplete': []}
+
 def get_active_users() -> List[Dict[str, Any]]:
     """Get all active users from DynamoDB"""
     try:
@@ -86,7 +155,7 @@ def get_active_users() -> List[Dict[str, Any]]:
         for user in users:
             cleaned_user = clean_event_data(user)  # Reuse the same cleaning function
             cleaned_users.append(cleaned_user)
-            logger.info(f"👤 User: {cleaned_user.get('user_id')} - {cleaned_user.get('first_name', 'Unknown')}")
+            logger.info(f"👤 User: {cleaned_user.get('first_name', 'Unknown')}")
         
         return cleaned_users
         
@@ -441,15 +510,92 @@ def get_todays_events_from_google(user_id: int) -> List[Dict[str, Any]]:
         logger.error(f"Failed to get today's events from Google Calendar for user {user_id}: {e}")
         return []
 
-def format_current_event_message(event: Optional[Dict[str, Any]], user_name: str) -> str:
-    """Format current event into a readable message"""
+def add_task_reminders(user_id: int, context: str) -> str:
+    """Add task reminders to messages based on context"""
+    try:
+        logger.info(f"🆕 NEW DEPLOYMENT DETECTED! add_task_reminders called for user {user_id}, context: {context}")
+        
+        user_tasks = get_user_tasks(user_id)
+        logger.info(f"📊 User tasks retrieved: {user_tasks}")
+        
+        due_today = user_tasks.get('due_today', [])
+        incomplete = user_tasks.get('incomplete', [])
+        
+        logger.info(f"📅 Tasks due today: {len(due_today)}")
+        logger.info(f"📝 Total incomplete tasks: {len(incomplete)}")
+        
+        if not due_today and not incomplete:
+            logger.info("ℹ️ No tasks to display")
+            return ""
+        
+        message = "\n📋 **Task Reminders**\n\n"
+        
+        # Add context-specific message
+        if context == "free_time":
+            message += "Since you're free right now, here are your tasks:\n\n"
+        elif context == "after_event":
+            message += "After this event, you can focus on these tasks:\n\n"
+        else:
+            message += "Here are your current tasks:\n\n"
+        
+        # Tasks due today (high priority)
+        if due_today:
+            message += "🚨 **Due Today:**\n"
+            for i, task in enumerate(due_today[:3], 1):  # Show first 3
+                priority = task.get('priority', -1)
+                priority_text = f"P{priority}" if priority in (1,2,3,4,5) else "P-"
+                task_name = task.get('name', 'Unnamed')
+                message += f"{i}. [{priority_text}] {task_name}\n"
+                logger.info(f"📋 Added due today task: [{priority_text}] {task_name}")
+            
+            if len(due_today) > 3:
+                message += f"   ... and {len(due_today) - 3} more due today\n"
+            message += "\n"
+        
+        # Other incomplete tasks
+        if incomplete and len(incomplete) > len(due_today):
+            other_tasks = [t for t in incomplete if t not in due_today]
+            if other_tasks:
+                message += "📝 **Other Incomplete Tasks:**\n"
+                for i, task in enumerate(other_tasks[:2], 1):  # Show first 2
+                    priority = task.get('priority', -1)
+                    priority_text = f"P{priority}" if priority in (1,2,3,4,5) else "P-"
+                    due_date = task.get('due_date', '')
+                    due_text = f" (due: {due_date})" if due_date else ""
+                    task_name = task.get('name', 'Unnamed')
+                    message += f"{i}. [{priority_text}] {task_name}{due_text}\n"
+                    logger.info(f"📋 Added incomplete task: [{priority_text}] {task_name}{due_text}")
+                
+                if len(other_tasks) > 2:
+                    message += f"   ... and {len(other_tasks) - 2} more incomplete tasks\n"
+                message += "\n"
+        
+        message += "💡 Use `/t-list` to see all your tasks or `/t-today` for today's due tasks."
+        logger.info(f"📋 Final task reminder message length: {len(message)} characters")
+        return message
+        
+    except Exception as e:
+        logger.error(f"🆕 NEW DEPLOYMENT DETECTED! Failed to add task reminders: {e}")
+        import traceback
+        logger.error(f"📋 Task reminder error traceback: {traceback.format_exc()}")
+        return "\n📋 **Tasks**\nUnable to load task information at this time.\n"
+
+def format_current_event_message(event: Optional[Dict[str, Any]], user_name: str, user_id: int) -> str:
+    """Format current event into a readable message with task reminders when appropriate"""
+    logger.info(f"🆕 NEW DEPLOYMENT DETECTED! format_current_event_message called for user {user_id}, event: {event is not None}")
+    
     if not event:
-        return (
+        # No current event - add task reminders
+        message = (
             f"👋 Hello {user_name}!\n\n"
             "📅 **Current Status**\n"
             "No events scheduled for right now.\n\n"
-            "You're free to work on other tasks! 🚀"
         )
+        
+        # Add task reminders since user is free
+        logger.info(f"🆕 NEW DEPLOYMENT DETECTED! No current event, adding free time task reminders")
+        message += add_task_reminders(user_id, "free_time")
+        return message
     
     # Check if this is a "no current event" case with next event info
     if event.get('status') == 'no_current':
@@ -493,6 +639,10 @@ def format_current_event_message(event: Optional[Dict[str, Any]], user_name: str
                 message += "\n"
                 message += "You have some free time! 🚀"
                 return message
+    
+    # Check if there's a next event - if no next event, add task reminders
+    next_event = event.get('next_event')
+    has_next_event = next_event and next_event.get('summary')
     
     summary = event.get('summary', 'No Title')
     start_time = event.get('start_time', '')
@@ -587,68 +737,112 @@ def format_current_event_message(event: Optional[Dict[str, Any]], user_name: str
                 message += f"📍 {next_location}\n"
                 
             message += "\n"
-    else:
-        message += "⏭️ **Next Upcoming Event**\n\n"
-        message += "No more events scheduled for today.\n\n"
+    
+    # ALWAYS add task reminders regardless of next event status
+    logger.info(f"🆕 NEW DEPLOYMENT DETECTED! Adding task reminders for user {user_id} (always)")
+    task_reminders = add_task_reminders(user_id, "after_event")
+    logger.info(f"📋 Task reminders generated: {len(task_reminders)} characters")
+    if task_reminders:
+        logger.info(f"📋 Task reminder preview: {task_reminders[:100]}...")
+    message += task_reminders
     
     message += "Stay focused and productive! 💪"
+    logger.info(f"🆕 NEW DEPLOYMENT DETECTED! Final message length: {len(message)} characters")
     return message
 
-def format_morning_summary_message(events: List[Dict[str, Any]], user_name: str) -> str:
-    """Format today's events into a morning summary message"""
+def format_morning_summary_message(events: List[Dict[str, Any]], user_name: str, user_id: int) -> str:
+    """Format today's events into a morning summary message with task information"""
     if not events:
-        return (
+        message = (
             f"🌅 Good morning {user_name}!\n\n"
             "📅 **Your Schedule Today**\n"
             "No events scheduled for today.\n\n"
-            "Perfect day to plan and be productive! 🚀"
         )
-    
-    # Sort events by start time
-    sorted_events = sorted(events, key=lambda x: x.get('start_time', ''))
-    
-    # Get today's date for the header
-    today = datetime.utcnow()
-    today_str = today.strftime('%A, %B %d, %Y')
-    
-    message = f"🌅 Good morning {user_name}!\n\n"
-    message += f"📅 **Your Schedule for {today_str}**\n\n"
-    
-    for i, event in enumerate(sorted_events, 1):
-        summary = event.get('summary', 'No Title')
-        start_time = event.get('start_time', '')
-        end_time = event.get('end_time', '')
-        location = event.get('location', '')
+    else:
+        # Sort events by start time
+        sorted_events = sorted(events, key=lambda x: x.get('start_time', ''))
         
-        # Parse and format the time
-        try:
-            if 'T' in start_time:
-                # DateTime event
-                start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-                end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
-                start_time_str = start_dt.strftime('%I:%M %p')
-                end_time_str = end_dt.strftime('%I:%M %p')
-                time_icon = "🕐"
-            else:
-                # Date event (all-day)
-                start_dt = datetime.fromisoformat(start_time)
-                start_time_str = "All Day"
-                end_time_str = "All Day"
-                time_icon = "📅"
-        except:
-            start_time_str = "Time TBD"
-            end_time_str = "Time TBD"
-            time_icon = "❓"
+        # Get today's date for the header
+        today = datetime.utcnow()
+        today_str = today.strftime('%A, %B %d, %Y')
         
-        message += f"{i}. **{summary}**\n"
-        message += f"   {time_icon} {start_time_str} - {end_time_str}\n"
+        message = f"🌅 Good morning {user_name}!\n\n"
+        message += f"📅 **Your Schedule for {today_str}**\n\n"
         
-        if location:
-            message += f"   📍 {location}\n"
+        for i, event in enumerate(sorted_events, 1):
+            summary = event.get('summary', 'No Title')
+            start_time = event.get('start_time', '')
+            end_time = event.get('end_time', '')
+            location = event.get('location', '')
+            
+            # Parse and format the time
+            try:
+                if 'T' in start_time:
+                    # DateTime event
+                    start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                    end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                    start_time_str = start_dt.strftime('%I:%M %p')
+                    end_time_str = end_dt.strftime('%I:%M %p')
+                    time_icon = "🕐"
+                else:
+                    # Date event (all-day)
+                    start_dt = datetime.fromisoformat(start_time)
+                    start_time_str = "All Day"
+                    end_time_str = "All Day"
+                    time_icon = "📅"
+            except:
+                start_time_str = "Time TBD"
+                end_time_str = "Time TBD"
+                time_icon = "❓"
+            
+            message += f"{i}. **{summary}**\n"
+            message += f"   {time_icon} {start_time_str} - {end_time_str}\n"
+            
+            if location:
+                message += f"   📍 {location}\n"
+            
+            message += "\n"
         
-        message += "\n"
+        message += f"Total: {len(events)} event{'s' if len(events) != 1 else ''} today\n\n"
     
-    message += f"Total: {len(events)} event{'s' if len(events) != 1 else ''} today\n\n"
+    # Add task information
+    try:
+        user_tasks = get_user_tasks(user_id)
+        due_today = user_tasks.get('due_today', [])
+        incomplete = user_tasks.get('incomplete', [])
+        
+        # Tasks due today section
+        message += "📋 **Tasks Due Today**\n"
+        if due_today:
+            for i, task in enumerate(due_today, 1):
+                priority = task.get('priority', -1)
+                priority_text = f"P{priority}" if priority in (1,2,3,4,5) else "P-"
+                message += f"{i}. [{priority_text}] {task.get('name', 'Unnamed')}\n"
+            message += f"\nYou have {len(due_today)} task{'s' if len(due_today) != 1 else ''} due today!\n\n"
+        else:
+            message += "No tasks due today. 🎉\n\n"
+        
+        # All incomplete tasks section
+        message += "📝 **All Incomplete Tasks**\n"
+        if incomplete:
+            for i, task in enumerate(incomplete[:5], 1):  # Show first 5
+                priority = task.get('priority', -1)
+                priority_text = f"P{priority}" if priority in (1,2,3,4,5) else "P-"
+                due_date = task.get('due_date', '')
+                due_text = f" (due: {due_date})" if due_date else ""
+                message += f"{i}. [{priority_text}] {task.get('name', 'Unnamed')}{due_text}\n"
+            
+            if len(incomplete) > 5:
+                message += f"... and {len(incomplete) - 5} more incomplete tasks\n"
+            
+            message += f"\nYou have {len(incomplete)} incomplete task{'s' if len(incomplete) != 1 else ''} in total.\n\n"
+        else:
+            message += "All tasks completed! 🎉\n\n"
+        
+    except Exception as e:
+        logger.error(f"Failed to add task information to morning summary: {e}")
+        message += "📋 **Tasks**\nUnable to load task information at this time.\n\n"
+    
     message += "Have a great day! 💪"
     return message
 
@@ -709,7 +903,7 @@ async def process_user_reminders(user: Dict[str, Any], message_type: str = 'curr
             # Clean event data to remove Decimal types
             if todays_events:
                 todays_events = [clean_event_data(event) for event in todays_events]
-            message = format_morning_summary_message(todays_events, user_name)
+            message = format_morning_summary_message(todays_events, user_name, user_id)
             event_count = len(todays_events)
             notification_type = 'morning_summary'
             events_found = len(todays_events)
@@ -719,10 +913,14 @@ async def process_user_reminders(user: Dict[str, Any], message_type: str = 'curr
             # Clean event data to remove Decimal types
             if current_event:
                 current_event = clean_event_data(current_event)
-            message = format_current_event_message(current_event, user_name)
+            message = format_current_event_message(current_event, user_name, user_id)
             event_count = 1 if current_event else 0
             notification_type = 'current_event_reminder'
             events_found = current_event is not None
+        
+        # Log the final message before sending
+        logger.info(f"🆕 NEW DEPLOYMENT DETECTED! Final message before sending (first 200 chars): {message[:200]}...")
+        logger.info(f"🆕 NEW DEPLOYMENT DETECTED! Message length: {len(message)} characters")
         
         # Send via Telegram
         success = await send_telegram_message(user_id, message)

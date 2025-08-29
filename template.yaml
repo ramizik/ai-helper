@@ -199,6 +199,7 @@ Resources:
         Variables:
           USERS_TABLE: !Sub 'aihelper-users-${Environment}'
           CALENDAR_EVENTS_TABLE: !Sub 'aihelper-calendar-events-${Environment}'
+          TASKS_TABLE: !Sub 'aihelper-tasks-${Environment}'
           BOT_TOKEN_SECRET: 'telegram-bot-token-dev'
           GOOGLE_CREDENTIALS_SECRET: 'google-calendar-credentials-dev'
           ENVIRONMENT: !Ref Environment
@@ -207,6 +208,8 @@ Resources:
             TableName: !Ref UsersTable
         - DynamoDBCrudPolicy:
             TableName: !Ref CalendarEventsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TasksTable
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
