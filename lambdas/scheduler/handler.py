@@ -176,13 +176,17 @@ def get_current_event_from_google(user_id: int) -> Optional[Dict[str, Any]]:
         # Get current time (now)
         now = datetime.utcnow()
         
-        # Create a time window: 1 hour before and 1 hour after current time
-        # This ensures we catch events that started earlier and are still running
+        # Create a time window: from current time until end of day (23:59:59)
+        # This ensures we catch events that started earlier and are still running, plus all upcoming events
         time_min = (now - timedelta(hours=1)).isoformat() + 'Z'
-        time_max = (now + timedelta(hours=1)).isoformat() + 'Z'
+        
+        # Set time_max to end of current day
+        end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        time_max = end_of_day.isoformat() + 'Z'
         
         logger.info(f"⏰ Checking for events in time window: {time_min} to {time_max}")
         logger.info(f"🕐 Current time: {now.isoformat() + 'Z'}")
+        logger.info(f"🌙 End of day: {end_of_day.isoformat() + 'Z'}")
         
         # Fetch events from ALL calendars
         all_events = []
@@ -193,7 +197,7 @@ def get_current_event_from_google(user_id: int) -> Optional[Dict[str, Any]]:
                     calendarId=calendar_id,
                     timeMin=time_min,
                     timeMax=time_max,
-                    maxResults=20,  # Get more events per calendar
+                    maxResults=50,  # Increased to get more events across the day
                     singleEvents=True,
                     orderBy='startTime'
                 ).execute()
@@ -217,6 +221,9 @@ def get_current_event_from_google(user_id: int) -> Optional[Dict[str, Any]]:
         
         # Find the event that is currently active (started before now and ends after now)
         current_event = None
+        next_event = None
+        next_event_start = None
+        
         for event in all_events:
             # Check if this is an all-day event
             if event.get('start', {}).get('date') is not None:
@@ -257,13 +264,52 @@ def get_current_event_from_google(user_id: int) -> Optional[Dict[str, Any]]:
                     current_event = event
                     logger.info(f"🎯 Found currently active event: {event.get('summary', 'No Title')}")
                     logger.info(f"  📅 Start: {start_dt}, End: {end_dt}, Now: {now}")
-                    break
+                
+                # Check if this is the next upcoming event (starts after current time)
+                if start_dt > now:
+                    if next_event is None or start_dt < next_event_start:
+                        next_event = event
+                        next_event_start = start_dt
+                        logger.info(f"⏭️ Found next upcoming event: {event.get('summary', 'No Title')} at {start_dt}")
+                        
             except Exception as e:
                 logger.warning(f"Failed to parse event time: {e}")
                 continue
         
+        # Log summary of what we found
+        if current_event:
+            logger.info(f"✅ Current event: {current_event.get('summary', 'No Title')}")
+        else:
+            logger.info(f"😴 No current event found")
+            
+        if next_event:
+            logger.info(f"⏭️ Next event: {next_event.get('summary', 'No Title')} at {next_event_start}")
+        else:
+            logger.info(f"📭 No next event found for today")
+        
         if not current_event:
             logger.info(f"😴 No currently active events found for user {user_id}")
+            
+            # Even if no current event, return next event info if available
+            if next_event and next_event_start:
+                logger.info(f"📋 Returning next event info for user {user_id}")
+                return {
+                    'summary': 'No Current Event',
+                    'start_time': '',
+                    'end_time': '',
+                    'location': '',
+                    'description': '',
+                    'event_id': '',
+                    'status': 'no_current',
+                    'next_event': {
+                        'summary': next_event.get('summary', 'No Title'),
+                        'start_time': next_event.get('start', {}).get('dateTime', ''),
+                        'end_time': next_event.get('end', {}).get('dateTime', ''),
+                        'location': next_event.get('location', ''),
+                        'time_until_start': (next_event_start - now).total_seconds()
+                    }
+                }
+            
             return None
         
         # Transform Google Calendar event to our format
@@ -276,6 +322,18 @@ def get_current_event_from_google(user_id: int) -> Optional[Dict[str, Any]]:
             'event_id': current_event.get('id', ''),
             'status': current_event.get('status', 'confirmed')
         }
+        
+        # Add next event information if available
+        if next_event and next_event_start:
+            next_event_end = next_event.get('end', {}).get('dateTime', '')
+            formatted_event['next_event'] = {
+                'summary': next_event.get('summary', 'No Title'),
+                'start_time': next_event.get('start', {}).get('dateTime', ''),
+                'end_time': next_event_end,
+                'location': next_event.get('location', ''),
+                'time_until_start': (next_event_start - now).total_seconds()
+            }
+            logger.info(f"📋 Next event info added: {next_event.get('summary', 'No Title')} in {formatted_event['next_event']['time_until_start']:.0f} seconds")
         
         return formatted_event
         
@@ -393,6 +451,49 @@ def format_current_event_message(event: Optional[Dict[str, Any]], user_name: str
             "You're free to work on other tasks! 🚀"
         )
     
+    # Check if this is a "no current event" case with next event info
+    if event.get('status') == 'no_current':
+        next_event = event.get('next_event')
+        if next_event:
+            next_summary = next_event.get('summary', 'No Title')
+            next_location = next_event.get('location', '')
+            time_until_start = next_event.get('time_until_start', 0)
+            
+            # Format time until next event
+            if time_until_start > 0:
+                hours = int(time_until_start // 3600)
+                minutes = int((time_until_start % 3600) // 60)
+                
+                if hours > 0:
+                    time_str = f"{hours}h {minutes}m"
+                else:
+                    time_str = f"{minutes}m"
+                
+                message = f"👋 Hello {user_name}!\n\n"
+                message += "📅 **Current Status**\n"
+                message += "No events scheduled for right now.\n\n"
+                message += "⏭️ **Next Upcoming Event**\n\n"
+                message += f"**{next_summary}**\n"
+                message += f"⏰ Starts in: **{time_str}**\n"
+                
+                # Add start and end times
+                try:
+                    if 'T' in next_event.get('start_time', ''):
+                        start_dt = datetime.fromisoformat(next_event.get('start_time', '').replace('Z', '+00:00'))
+                        end_dt = datetime.fromisoformat(next_event.get('end_time', '').replace('Z', '+00:00'))
+                        start_time_str = start_dt.strftime('%I:%M %p')
+                        end_time_str = end_dt.strftime('%I:%M %p')
+                        message += f"🕐 **{start_time_str} - {end_time_str}**\n"
+                except:
+                    message += f"🕐 Time: TBD\n"
+                
+                if next_location:
+                    message += f"📍 {next_location}\n"
+                    
+                message += "\n"
+                message += "You have some free time! 🚀"
+                return message
+    
     summary = event.get('summary', 'No Title')
     start_time = event.get('start_time', '')
     end_time = event.get('end_time', '')
@@ -421,12 +522,75 @@ def format_current_event_message(event: Optional[Dict[str, Any]], user_name: str
     message = f"👋 Hello {user_name}!\n\n"
     message += "📅 **Current Event**\n\n"
     message += f"**{summary}**\n"
-    message += f"🕐 {start_time_str} - {end_time_str} on {date_str}\n"
+    message += f"🕐 {start_time_str} - {end_time_str}\n"
     
     if location:
         message += f"📍 {location}\n"
     
     message += "\n"
+    
+    # Add next event information if available
+    next_event = event.get('next_event')
+    if next_event:
+        next_summary = next_event.get('summary', 'No Title')
+        next_location = next_event.get('location', '')
+        next_start_time = next_event.get('start_time', '')
+        next_end_time = next_event.get('end_time', '')
+        time_until_start = next_event.get('time_until_start', 0)
+        
+        # Format time until next event
+        if time_until_start > 0:
+            hours = int(time_until_start // 3600)
+            minutes = int((time_until_start % 3600) // 60)
+            
+            if hours > 0:
+                time_str = f"{hours}h {minutes}m"
+            else:
+                time_str = f"{minutes}m"
+            
+            message += "⏭️ **Next Upcoming Event**\n\n"
+            message += f"**{next_summary}**\n"
+            message += f"⏰ Starts in: **{time_str}**\n"
+            
+            # Add start and end times
+            try:
+                if 'T' in next_start_time:
+                    start_dt = datetime.fromisoformat(next_start_time.replace('Z', '+00:00'))
+                    end_dt = datetime.fromisoformat(next_end_time.replace('Z', '+00:00'))
+                    start_time_str = start_dt.strftime('%I:%M %p')
+                    end_time_str = end_dt.strftime('%I:%M %p')
+                    message += f"🕐 **{start_time_str} - {end_time_str}**\n"
+            except:
+                message += f"🕐 Time: TBD\n"
+            
+            if next_location:
+                message += f"📍 {next_location}\n"
+                
+            message += "\n"
+        else:
+            message += "⏭️ **Next Upcoming Event**\n\n"
+            message += f"**{next_summary}**\n"
+            message += "⏰ Starting soon!\n"
+            
+            # Add start and end times
+            try:
+                if 'T' in next_start_time:
+                    start_dt = datetime.fromisoformat(next_start_time.replace('Z', '+00:00'))
+                    end_dt = datetime.fromisoformat(next_end_time.replace('Z', '+00:00'))
+                    start_time_str = start_dt.strftime('%I:%M %p')
+                    end_time_str = end_dt.strftime('%I:%M %p')
+                    message += f"🕐 **{start_time_str} - {end_time_str}**\n"
+            except:
+                message += f"🕐 Time: TBD\n"
+            
+            if next_location:
+                message += f"📍 {next_location}\n"
+                
+            message += "\n"
+    else:
+        message += "⏭️ **Next Upcoming Event**\n\n"
+        message += "No more events scheduled for today.\n\n"
+    
     message += "Stay focused and productive! 💪"
     return message
 
@@ -443,8 +607,12 @@ def format_morning_summary_message(events: List[Dict[str, Any]], user_name: str)
     # Sort events by start time
     sorted_events = sorted(events, key=lambda x: x.get('start_time', ''))
     
+    # Get today's date for the header
+    today = datetime.utcnow()
+    today_str = today.strftime('%A, %B %d, %Y')
+    
     message = f"🌅 Good morning {user_name}!\n\n"
-    message += "📅 **Your Schedule Today**\n\n"
+    message += f"📅 **Your Schedule for {today_str}**\n\n"
     
     for i, event in enumerate(sorted_events, 1):
         summary = event.get('summary', 'No Title')
@@ -460,19 +628,16 @@ def format_morning_summary_message(events: List[Dict[str, Any]], user_name: str)
                 end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
                 start_time_str = start_dt.strftime('%I:%M %p')
                 end_time_str = end_dt.strftime('%I:%M %p')
-                date_str = start_dt.strftime('%A, %B %d')
                 time_icon = "🕐"
             else:
                 # Date event (all-day)
                 start_dt = datetime.fromisoformat(start_time)
                 start_time_str = "All Day"
                 end_time_str = "All Day"
-                date_str = start_dt.strftime('%A, %B %d')
                 time_icon = "📅"
         except:
             start_time_str = "Time TBD"
             end_time_str = "Time TBD"
-            date_str = "Date TBD"
             time_icon = "❓"
         
         message += f"{i}. **{summary}**\n"

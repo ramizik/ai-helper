@@ -1,15 +1,15 @@
 # AI Helper - Cloud-Native AI Assistant
 
-A fully cloud-native AI assistant built on AWS serverless architecture, designed to provide intelligent goal tracking, calendar management, reminders, and productivity assistance through Telegram integration.
+A cloud-native AI assistant built on AWS serverless architecture, designed to provide calendar management, reminders, and productivity assistance through Telegram integration.
 
 ## 🎯 **Current Status**
 
-**✅ PHASE 2 COMPLETE** - Telegram Bot and Calendar Integration fully operational  
+**✅ PHASE 2 COMPLETE** - Telegram Bot and Calendar Integration operational  
 **🚀 PHASE 3 NEXT** - AI processing with LangChain integration
 
 ## Project Overview
 
-This project implements a comprehensive AI assistant that operates entirely in the cloud using AWS services. The system currently processes messages via webhooks, manages calendar events, and is ready for AI-powered insights and autonomous operation.
+This project implements an AI assistant that operates in the cloud using AWS services. The system currently processes messages via webhooks, manages calendar events, and sends automated reminders. It's ready for AI-powered insights and autonomous operation.
 
 ## 🏗️ **Architecture**
 
@@ -35,7 +35,7 @@ This project implements a comprehensive AI assistant that operates entirely in t
 - **AWS Lambda** - Serverless compute (Python 3.13 runtime)
 - **Amazon API Gateway** - HTTP API management
 - **Amazon DynamoDB** - NoSQL database storage
-- **Amazon EventBridge** 📋 **PLANNED** - Event-driven scheduling
+- **Amazon EventBridge** ✅ **DEPLOYED** - Event-driven scheduling
 - **AWS Secrets Manager** - Secure credential storage
 - **Amazon CloudWatch** - Logging and monitoring
 - **AWS CloudFormation/SAM** - Infrastructure as Code
@@ -84,8 +84,8 @@ Telegram API ←→ API Gateway ←→ Lambda Functions ←→ AWS Services
 ### Infrastructure & Configuration ✅ **DEPLOYED**
 - `template.yaml` - AWS SAM infrastructure definition
 - `deploy.ps1` - AWS deployment automation
-- `SCHEMA_DOCUMENTATION.md` - Data schemas and models
-- `VERSION_HISTORY.md` - Development history and milestones
+- `toggle-scheduler.ps1` - Scheduler on/off control
+- `tail-logs.ps1` - Real-time log monitoring
 
 ### Documentation ✅ **COMPLETE**
 - `PROJECT_STRUCTURE.md` - Detailed architecture documentation
@@ -99,13 +99,14 @@ Telegram API ←→ API Gateway ←→ Lambda Functions ←→ AWS Services
 - **`/help`** - Command assistance and bot information
 - **`/test`** - Test bot functionality and database connection
 
-### Automated Reminders ✅ **NEWLY IMPLEMENTED**
+### Automated Reminders ✅ **IMPLEMENTED**
 - **Every Minute (Testing)**: Scheduler automatically sends users information about their current calendar event
 - **Morning Summary (7 AM)**: Daily morning message with complete list of all events for the day
 - **Real-Time Data**: Fetches events directly from Google Calendar API (not from database)
+- **Multi-Calendar Support**: Queries all accessible calendars, not just primary
 - **Smart Message Types**: Automatically switches between current event reminders and morning summaries
-- **Smart Formatting**: Displays event time, duration, location, and summary
-- **Notification Logging**: Tracks all sent reminders in DynamoDB for monitoring
+- **Next Event Detection**: Shows upcoming events with countdown timers
+- **All-Day Event Filtering**: Skips day-long events in current event notifications
 
 ### Calendar Integration ✅ **FULLY FUNCTIONAL**
 - **Google Calendar API** - Secure OAuth 2.0 authentication
@@ -124,25 +125,59 @@ Telegram API ←→ API Gateway ←→ Lambda Functions ←→ AWS Services
 This is a **fully cloud-native** system with no local development files:
 - ✅ **Telegram Bot** - Deployed and responding to messages
 - ✅ **Calendar Fetcher** - Deployed and can fetch Google Calendar events
+- ✅ **Scheduler** - Deployed and sending automated reminders
 - ✅ **Infrastructure** - All AWS resources created and operational
 - ✅ **Secrets Management** - Credentials securely stored in AWS Secrets Manager
 - 📋 **AI Features** - Ready for LangChain integration
 
-## 🔧 **Testing & Development**
+## 🔧 **Developer Commands & Operations**
 
-### **Current Testing Capabilities**:
-```bash
-# Test Calendar Fetcher (deployed)
-aws lambda invoke --function-name aihelper-calendar-fetcher-dev --payload '{}' response.json
+### **Scheduler Control (Pause/Unpause)**
+```powershell
+# Check current status
+.\toggle-scheduler.ps1 status
 
-# Test Telegram Bot (deployed)
-# Send messages to your bot on Telegram
+# Pause scheduler (stop sending messages)
+.\toggle-scheduler.ps1 off
+
+# Resume scheduler (start sending messages again)
+.\toggle-scheduler.ps1 on
 ```
 
-### **Monitoring**:
-- **CloudWatch Logs** - Real-time Lambda execution logs
-- **DynamoDB Console** - View stored data and table structure
-- **Lambda Console** - Function performance and error monitoring
+### **Real-Time Log Monitoring**
+```powershell
+# Monitor all Lambda functions in real-time
+.\tail-logs.ps1
+
+# Monitor specific function (replace FUNCTION_NAME)
+aws logs tail "/aws/lambda/FUNCTION_NAME" --follow --region us-west-2
+
+# Example: Monitor scheduler
+aws logs tail "/aws/lambda/aihelper-scheduler-dev" --follow --region us-west-2
+```
+
+### **Cost Monitoring**
+```powershell
+# Get today's total AWS cost
+$today = Get-Date -Format "yyyy-MM-dd"
+$tomorrow = (Get-Date).AddDays(1).ToString("yyyy-MM-dd")
+aws ce get-cost-and-usage --time-period Start=$today,End=$tomorrow --granularity=DAILY --metrics=UnblendedCost --query "ResultsByTime[0].Total.UnblendedCost.Amount" --output text
+
+# Get cost breakdown by service
+aws ce get-cost-and-usage --time-period Start=$today,End=$tomorrow --granularity=DAILY --metrics=UnblendedCost --group-by Type=DIMENSION,Key=SERVICE --query "ResultsByTime[0].Groups[].{Service:Keys[0],Cost:Metrics.UnblendedCost.Amount}" --output table
+```
+
+### **Testing Functions**
+```powershell
+# Test Calendar Fetcher
+aws lambda invoke --function-name aihelper-calendar-fetcher-dev --payload '{}' response.json
+
+# Test Scheduler manually
+aws lambda invoke --function-name aihelper-scheduler-dev --payload '{}' response.json
+
+# Check function status
+aws lambda get-function --function-name aihelper-scheduler-dev --region us-west-2 --query "Configuration.State" --output text
+```
 
 ## 📋 **Next Development Phase**
 
@@ -150,8 +185,8 @@ aws lambda invoke --function-name aihelper-calendar-fetcher-dev --payload '{}' r
 - [ ] **LangChain Setup** - Install and configure LangChain dependencies
 - [ ] **AI Processor** - Implement intelligent event analysis
 - [ ] **Memory Management** - Store and retrieve AI context
-- [ ] **Morning Summaries** - Generate daily schedule insights
-- [ ] **EventBridge Rules** - Automated scheduling and triggers
+- [ ] **Smart Summaries** - Generate daily schedule insights
+- [ ] **Intelligent Reminders** - AI-powered notification timing
 
 ### **Future Phases**:
 - **Phase 4**: Proactive notifications and smart reminders
@@ -160,27 +195,28 @@ aws lambda invoke --function-name aihelper-calendar-fetcher-dev --payload '{}' r
 
 ## 📚 **Documentation**
 
-- **[VERSION_HISTORY.md](./VERSION_HISTORY.md)** - Complete development timeline
-- **[SCHEMA_DOCUMENTATION.md](./SCHEMA_DOCUMENTATION.md)** - Data models and schemas
-- **[DEVELOPMENT.md](./DEVELOPMENT.md)** - Commands and development reference
-- **[PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md)** - Detailed architecture overview
+- **[VERSION_HISTORY.md](./documentation/VERSION_HISTORY.md)** - Complete development timeline
+- **[SCHEMA_DOCUMENTATION.md](./documentation/SCHEMA_DOCUMENTATION.md)** - Data models and schemas
+- **[DEVELOPMENT.md](./documentation/DEVELOPMENT.md)** - Commands and development reference
+- **[PROJECT_STRUCTURE.md](./documentation/PROJECT_STRUCTURE.md)** - Detailed architecture overview
 
 ## 🎯 **Getting Started**
 
 ### **For Users**:
 1. **Start a conversation** with your bot on Telegram
 2. **Use commands** like `/start`, `/help`, `/test`
-3. **Monitor calendar integration** through CloudWatch logs
+3. **Receive automated reminders** about current and upcoming events
 
 ### **For Developers**:
 1. **Review current implementation** in `lambdas/` folders
 2. **Check deployment status** in AWS Console
-3. **Test functions** using AWS CLI commands
-4. **Plan next phase** with LangChain integration
+3. **Use provided scripts** for scheduler control and log monitoring
+4. **Test functions** using AWS CLI commands
+5. **Plan next phase** with LangChain integration
 
 ---
 
-**Current Status**: ✅ **Telegram Bot + Calendar Integration = FULLY OPERATIONAL**  
+**Current Status**: ✅ **Telegram Bot + Calendar Integration + Automated Reminders = OPERATIONAL**  
 **Next Goal**: 🚀 **AI Processing with LangChain**  
 **Deployment**: 🌐 **100% Cloud-Native on AWS**  
 **Cost**: 💰 **Serverless - Pay per use (~$5-20/month)**
