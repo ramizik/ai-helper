@@ -92,25 +92,41 @@ async def start_command(update: Update, context: Any) -> None:
     
     # Store user info in DynamoDB if available
     if dynamodb:
-        try:
-            table_name = os.environ.get('USERS_TABLE', 'aihelper-users-dev')
-            table = dynamodb.Table(table_name)
-            
-            # Create user profile
-            user_item = {
-                'user_id': user.id,
-                'sort_key': 'profile',
-                'first_name': user.first_name,
-                'username': user.username,
-                'created_at': datetime.utcnow().isoformat() + 'Z',
-                'updated_at': datetime.utcnow().isoformat() + 'Z'
-            }
-            
-            table.put_item(Item=user_item)
-            logger.info(f"User profile stored: {user.id}")
-            
-        except Exception as e:
-            logger.error(f"Failed to store user profile: {e}")
+            try:
+                table_name = os.environ.get('USERS_TABLE', 'aihelper-users-dev')
+                table = dynamodb.Table(table_name)
+                
+                # Create user profile
+                user_item = {
+                    'user_id': user.id,
+                    'sort_key': 'profile',
+                    'first_name': user.first_name,
+                    'username': user.username,
+                    'created_at': datetime.utcnow().isoformat() + 'Z',
+                    'updated_at': datetime.utcnow().isoformat() + 'Z'
+                }
+                
+                # Check if user profile already exists
+                existing = table.get_item(
+                    Key={
+                        'user_id': user.id,
+                        'sort_key': 'profile'
+                    }
+                )
+                
+                if 'Item' not in existing:
+                    # Create new profile
+                    table.put_item(Item=user_item)
+                    logger.info(f"New user profile created: {user.id}")
+                else:
+                    # Update existing profile
+                    user_item['updated_at'] = datetime.utcnow().isoformat() + 'Z'
+                    table.put_item(Item=user_item)
+                    logger.info(f"User profile updated: {user.id}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to store user profile: {e}")
+                # Continue with bot functionality even if DB fails
 
 async def help_command(update: Update, context: Any) -> None:
     """Handle /help command"""

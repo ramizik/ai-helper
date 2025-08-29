@@ -54,6 +54,14 @@ function Test-Prerequisites {
         Write-ColorOutput "  Note: Local builds may cause deployment issues" "Warning"
         $script:DockerAvailable = $false
     }
+    
+    # Check if samconfig.toml exists and is properly configured
+    if (-not (Test-Path "samconfig.toml")) {
+        Write-ColorOutput "WARNING samconfig.toml not found - will use guided deployment" "Warning"
+        Write-ColorOutput "  Run 'sam deploy --guided' once to create configuration" "Warning"
+    } else {
+        Write-ColorOutput "OK SAM configuration found" "Success"
+    }
 }
 
 function Test-ExistingSecrets {
@@ -86,11 +94,11 @@ function Build-Project {
     try {
         if ($script:DockerAvailable) {
             Write-ColorOutput "  Using Docker container build (recommended)" "Info"
-            sam build --use-container
+            sam build --use-container --config-env default
         } else {
             Write-ColorOutput "  Using local build (Docker not available)" "Warning"
             Write-ColorOutput "  This may cause deployment issues" "Warning"
-            sam build
+            sam build --config-env default
         }
         
         if ($LASTEXITCODE -ne 0) {
@@ -107,7 +115,8 @@ function Deploy-Stack {
     Write-ColorOutput "Deploying to AWS..." "Info"
     
     try {
-        $deployArgs = @("deploy", "--guided")
+        # Use non-guided deployment with config file and no confirmation
+        $deployArgs = @("deploy", "--config-env", "default", "--no-confirm-changeset", "--no-fail-on-empty-changeset")
         sam @deployArgs
         
         if ($LASTEXITCODE -ne 0) {

@@ -5,8 +5,14 @@ stack_name = "aihelper"
 resolve_s3 = true
 s3_prefix = "aihelper"
 region = "us-west-2"
-confirm_changeset = true
+confirm_changeset = false
 capabilities = "CAPABILITY_IAM"
 disable_rollback = true
 parameter_overrides = "Environment=\"dev\""
 image_repositories = []
+no_confirm_changeset = true
+
+[default.build.parameters]
+use_container = true
+cached = true
+parallel = true

@@ -155,6 +155,58 @@ Resources:
       Principal: events.amazonaws.com
       SourceArn: !GetAtt CalendarSyncRule.Arn
 
+  # Scheduler Function - Automated Reminders
+  SchedulerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'aihelper-scheduler-${Environment}'
+      CodeUri: lambdas/scheduler
+      Handler: handler.lambda_handler
+      Description: Automatically sends scheduled reminders to users with upcoming calendar events
+      Environment:
+        Variables:
+          USERS_TABLE: !Sub 'aihelper-users-${Environment}'
+          CALENDAR_EVENTS_TABLE: !Sub 'aihelper-calendar-events-${Environment}'
+          BOT_TOKEN_SECRET: 'telegram-bot-token-dev'
+          GOOGLE_CREDENTIALS_SECRET: 'google-calendar-credentials-dev'
+          ENVIRONMENT: !Ref Environment
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CalendarEventsTable
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: 'arn:aws:secretsmanager:*:*:secret:telegram-bot-token-dev*'
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: 'arn:aws:secretsmanager:*:*:secret:google-calendar-credentials-dev*'
+
+  # EventBridge Rule for Scheduler - Runs every minute for testing
+  SchedulerRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub 'aihelper-scheduler-${Environment}'
+      Description: Runs scheduler every minute to send reminders (testing frequency)
+      ScheduleExpression: cron(* * * * ? *)  # Every minute (every minute of every hour)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SchedulerFunction.Arn
+          Id: SchedulerTarget
+
+  # Lambda Permission for Scheduler EventBridge
+  SchedulerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SchedulerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SchedulerRule.Arn
+
 Outputs:
   TelegramBotApiUrl:
     Description: API Gateway URL for Telegram Bot webhook
@@ -167,6 +219,12 @@ Outputs:
     Value: !GetAtt CalendarFetcherFunction.Arn
     Export:
       Name: !Sub '${AWS::StackName}-calendar-fetcher-arn'
+
+  SchedulerFunctionArn:
+    Description: Scheduler Lambda function ARN
+    Value: !GetAtt SchedulerFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-scheduler-arn'
 
   DynamoDBTables:
     Description: DynamoDB table names

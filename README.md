@@ -18,14 +18,14 @@ This project implements a comprehensive AI assistant that operates entirely in t
 **Multi-Lambda Architecture**
 - **Telegram Bot Function** ✅ **IMPLEMENTED** - Webhook-based message processing
 - **Calendar Fetcher Function** ✅ **IMPLEMENTED** - Google Calendar integration and sync
+- **Scheduler Function** ✅ **IMPLEMENTED** - Automated reminders and notifications (testing: every minute)
 - **AI Processor Function** 📋 **PLANNED** - LangChain-powered AI processing and memory
-- **Scheduler Function** 📋 **PLANNED** - Task scheduling and notification management
 - **Notifier Function** 📋 **PLANNED** - Proactive message delivery to users
 
 **AWS Infrastructure** ✅ **DEPLOYED**
 - **API Gateway** - RESTful webhook endpoint for Telegram
 - **DynamoDB Tables** - Users, Calendar Events (AI Memory and Notifications planned)
-- **EventBridge Rules** 📋 **PLANNED** - Automated scheduling (8 AM daily, 30-min intervals, hourly sync)
+- **EventBridge Rules** ✅ **DEPLOYED** - Automated scheduling (Calendar sync hourly, Scheduler every minute for testing)
 - **Secrets Manager** - Secure storage for API keys and credentials
 - **CloudWatch** - Comprehensive logging and monitoring
 
@@ -66,6 +66,7 @@ Telegram API ←→ API Gateway ←→ Lambda Functions ←→ AWS Services
 1. **Message Flow**: User sends message → Telegram → API Gateway webhook → Lambda function ✅
 2. **Calendar Integration**: Manual sync with Google Calendar → Store events ✅
 3. **Data Persistence**: All interactions stored in DynamoDB ✅
+4. **Automated Reminders**: Scheduler runs every minute → Fetches current event from Google Calendar → Sends Telegram notifications ✅
 
 ### **Planned Future Flow**:
 4. **AI Processing**: Lambda processes with AI context → Stores in memory → Generates intelligent response 📋
@@ -76,8 +77,8 @@ Telegram API ←→ API Gateway ←→ Lambda Functions ←→ AWS Services
 ### Core Application
 - `lambdas/telegram_bot/` ✅ **IMPLEMENTED** - Telegram webhook handler
 - `lambdas/calendar_fetcher/` ✅ **IMPLEMENTED** - Google Calendar integration
+- `lambdas/scheduler/` ✅ **IMPLEMENTED** - Automated reminders and notifications
 - `lambdas/ai_processor/` 📋 **PLANNED** - AI processing and memory management
-- `lambdas/scheduler/` 📋 **PLANNED** - Task scheduling and management
 - `lambdas/notifier/` 📋 **PLANNED** - Notification delivery system
 
 ### Infrastructure & Configuration ✅ **DEPLOYED**
@@ -97,6 +98,14 @@ Telegram API ←→ API Gateway ←→ Lambda Functions ←→ AWS Services
 - **`/start`** - User registration with personalized greeting
 - **`/help`** - Command assistance and bot information
 - **`/test`** - Test bot functionality and database connection
+
+### Automated Reminders ✅ **NEWLY IMPLEMENTED**
+- **Every Minute (Testing)**: Scheduler automatically sends users information about their current calendar event
+- **Morning Summary (7 AM)**: Daily morning message with complete list of all events for the day
+- **Real-Time Data**: Fetches events directly from Google Calendar API (not from database)
+- **Smart Message Types**: Automatically switches between current event reminders and morning summaries
+- **Smart Formatting**: Displays event time, duration, location, and summary
+- **Notification Logging**: Tracks all sent reminders in DynamoDB for monitoring
 
 ### Calendar Integration ✅ **FULLY FUNCTIONAL**
 - **Google Calendar API** - Secure OAuth 2.0 authentication
